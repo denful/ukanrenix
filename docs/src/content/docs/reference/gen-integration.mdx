@@ -1,0 +1,174 @@
+---
+title: Gen Integration Reference
+description: API reference for gen-integration.nix — backward synthesis over gen-merge, gen-select, gen-scope, and gen-types.
+---
+
+## Import
+
+```nix
+let
+  ukanren = import ./gen-integration.nix {
+    inherit genMerge genSelect genTypes genScope;
+  };
+in
+```
+
+Returns the standard ukanren attrset merged with all gen-native synthesis functions below.
+
+---
+
+## gen-types-chr
+
+### typeGoal
+
+```
+typeGoal :: checker -> var -> goal
+```
+
+Deferred type guard using a gen-types checker. Passes while `var` is unbound; calls `checker.verify` when ground. Fails if verify returns non-null.
+
+```nix
+ukanren.chrRun 3 (q:
+  ukanren.conj (ukanren.typeGoal genTypes.int q) (ukanren.eq q 42)
+)
+# => [ 42 ]
+```
+
+### intGoal / strGoal / boolGoal
+
+```
+intGoal  :: var -> goal
+strGoal  :: var -> goal
+boolGoal :: var -> goal
+```
+
+Shortcuts for `typeGoal genTypes.int`, `typeGoal genTypes.str`, `typeGoal genTypes.bool`.
+
+### listOfGoal
+
+```
+listOfGoal :: checker -> var -> goal
+```
+
+`typeGoal (genTypes.listOf elemChecker)`.
+
+### nullOrGoal
+
+```
+nullOrGoal :: checker -> var -> goal
+```
+
+`typeGoal (genTypes.nullOr baseChecker)`.
+
+---
+
+## gen-schema-synth
+
+### synthFromOptions
+
+```
+synthFromOptions :: options -> desired -> int -> [{ weight; answer }]
+```
+
+Finds completions of `desired` satisfying `options` schema. Weight = invented field count. `options` is an attrset of gen-merge `mkOption` records.
+
+```nix
+ukanren.synthFromOptions
+  { port = genMerge.mkOption { type = genMerge.types.int; }; }
+  { port = 8080; }
+  3
+```
+
+### synthMinimalOverride
+
+```
+synthMinimalOverride :: base -> options -> desired -> attrset
+```
+
+Returns only the fields of `desired` that differ from `base`. Useful for computing config deltas.
+
+```nix
+ukanren.synthMinimalOverride
+  { port = 80; }
+  options
+  { port = 8080; }
+# => { port = 8080; }
+```
+
+### importSel
+
+```
+importSel :: schemaLib -> desired -> int -> [{ weight; answer }]
+```
+
+Searches a list of option-attrsets for schemas covering `desired`. Weight = uninvented fields. `answer` is a single-element list `[ schema ]`.
+
+---
+
+## gen-select-synth
+
+### synthSelector
+
+```
+synthSelector :: positives -> negatives -> int -> [sel]
+```
+
+Returns up to `n` gen-select native selector values (`{ __sel = ...; }`) that match all positives and none of the negatives. Uses `genSelect.matches` as oracle.
+
+```nix
+ukanren.synthSelector
+  [ { kind = "fn"; } ]
+  [ { kind = "var"; } ]
+  5
+# => [ { __sel = "attrs"; a = { kind = "fn"; }; } ]
+```
+
+---
+
+## gen-merge-backward
+
+### evalModuleo
+
+```
+evalModuleo :: modules -> var -> goal
+```
+
+Relational wrapper for `genMerge.evalModuleTree`. Unifies `q` with the merged config of `modules`.
+
+```nix
+ukanren.run 1 (q: ukanren.evalModuleo [ modA modB ] q)
+```
+
+### synthFromModules
+
+```
+synthFromModules :: moduleLib -> desired -> int -> [{ weight; answer; config }]
+```
+
+Enumerates subsets of `moduleLib` (smallest first) whose merged config covers `desired`. Weight = subset size. `config` is the full merged config of the subset.
+
+```nix
+ukanren.synthFromModules moduleLib { port = 8080; } 3
+```
+
+---
+
+## gen-scope-synth
+
+### synthDecls
+
+```
+synthDecls :: nodeIds -> parentGraph -> attrDefs -> desired -> candidateDecls -> int -> [{ weight; answer }]
+```
+
+Finds minimal declaration sets from `candidateDecls` satisfying `desired` attribute evaluations. Weight = total declared field count. Oracle: `genScope.eval`.
+
+```nix
+ukanren.synthDecls
+  [ "n1" "n2" ]
+  parentGraph
+  attrDefs
+  [ { id = "n1"; attr = "ty"; value = "Int"; } ]
+  candidateDecls
+  3
+```

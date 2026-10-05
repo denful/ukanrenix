@@ -1,0 +1,120 @@
+---
+title: Weighted Search
+description: Tropical semiring search — weight annotation, wrun, and cost-ordered answer enumeration.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Plain μKanren returns answers in the order the stream produces them — depth-first or
+interleaved, but never cost-ordered. The semiring extension adds a **weight** field to
+each stream entry so answers can be sorted by accumulated cost.
+
+## The tropical semiring
+
+ukanrenix uses the **tropical semiring** `(ℝ≥0, min, +)`:
+
+- **Addition** of weights accumulates cost along a conjunction path.
+- **Minimum** selects the best (cheapest) answer at disjunction.
+
+In practice: every stream entry carries a numeric `weight`. `wrun` collects answers
+and sorts them ascending — cheapest first.
+
+Unweighted goals carry implicit weight `0`. Wrapping a goal with `weight w g` adds `w`
+to each answer that `g` produces.
+
+## `weight w goal`
+
+`weight w goal` returns a new goal. When it runs, it executes `goal` and adds `w` to
+the accumulated weight of each resulting stream entry.
+
+```nix
+# answer has weight 5
+builtins.head (wrunFull 1 (q: weight 5 (eq q "x")))
+# => { answer = "x"; weight = 5; }
+```
+
+Weights compose additively through `conj`:
+
+```nix
+# 3 + 2 = 5
+(builtins.head (wrunFull 1 (q:
+  conj (weight 3 (eq q "x")) (weight 2 succeed)))).weight
+# => 5
+```
+
+<Aside type="note">
+`weight` does not affect which answers are returned — only their order. A goal with
+`weight 99` still succeeds; it just appears later in `wrun` output.
+</Aside>
+
+## `wrun n goalFn`
+
+Like `run`, but returns the `n` **lowest-weight** answers after sorting:
+
+```nix
+wrun 3 (q:
+  disj (weight 10 (eq q "expensive"))
+       (disj (weight 1  (eq q "cheap"))
+             (weight 5  (eq q "medium"))))
+# => [ "cheap" "medium" "expensive" ]
+```
+
+`wrun` exhausts the stream (up to an internal limit), collects all answers with their
+weights, sorts ascending, and reifies the top `n`.
+
+## `wrunFull n goalFn`
+
+Returns `[{ answer, weight }]` pairs instead of bare values — useful when the calling
+code needs to inspect costs:
+
+```nix
+wrunFull 2 (q:
+  disj (weight 2 (eq q "b"))
+       (weight 1 (eq q "a")))
+# => [ { answer = "a"; weight = 1; }
+#      { answer = "b"; weight = 2; } ]
+```
+
+## Use cases
+
+### LLM completion ranking
+
+Given a set of candidate completions from an LLM, assign each a cost based on
+log-probability or token length, then `wrun` to return the best-ranked valid one:
+
+```nix
+wrun 1 (q:
+  disj
+    (weight completion1.cost (conj (validateGoal completion1.text) (eq q completion1.text)))
+    (weight completion2.cost (conj (validateGoal completion2.text) (eq q completion2.text))))
+```
+
+### PBE synthesis with a cost model
+
+During program-by-example synthesis, prefer smaller programs. Weight each construct
+by its size:
+
+```nix
+# atom nodes cost 0, add nodes cost 1
+weight 0 (eq expr { atom = val; })
+weight 1 (eq expr { add = [e1 e2]; })
+```
+
+Combined with `wrun`, the synthesizer returns the **simplest** expression that fits
+the examples first.
+
+### Preferring ground values
+
+When a relation can invent fresh variables or use known values, bias toward the known:
+
+```nix
+# prefer ground binding (weight 0) over fresh var (weight 1)
+disj
+  (eq q knownValue)
+  (weight 1 (fresh (x: eq q x)))
+```
+
+<Aside type="tip">
+Weight `0` is the default. Only add `weight` calls where you want to express a
+preference — the rest of the search is unaffected.
+</Aside>

@@ -1,0 +1,88 @@
+---
+title: Semiring Reference
+description: Weighted search via the Tropical semiring — weight, wrun, wrunFull.
+---
+
+Weighted search uses the Tropical semiring: weights accumulate by addition; `wrun` sorts by ascending total weight (minimum-cost answers first).
+
+Internally, `wrun` over-samples `n * 100` states, deduplicates by reified answer, sorts stably by weight, then takes the top `n`.
+
+---
+
+## weight
+
+```
+weight :: int -> goal -> goal
+```
+
+Wraps `goal` so that every answer it produces has `w` added to its accumulated weight. Does not change the substitution or counter.
+
+```nix
+ukanren.wrun 3 (q:
+  ukanren.disj
+    (ukanren.weight 10 (ukanren.eq q "costly"))
+    (ukanren.weight 1  (ukanren.eq q "cheap"))
+)
+# => [ "cheap" "costly" ]
+```
+
+Weights compose additively across `conj` chains:
+
+```nix
+ukanren.wrunFull 1 (q:
+  ukanren.conj
+    (ukanren.weight 3 ukanren.succeed)
+    (ukanren.weight 2 (ukanren.eq q "x"))
+)
+# => [ { answer = "x"; weight = 5; } ]
+```
+
+---
+
+## wrun
+
+```
+wrun :: int -> (var -> goal) -> [term]
+```
+
+Like `run`, but returns answers sorted by ascending weight. Duplicates (same reified answer) are removed — first occurrence (lowest weight) wins.
+
+```nix
+ukanren.wrun 5 (q:
+  ukanren.disj
+    (ukanren.weight 0 (ukanren.eq q "free"))
+    (ukanren.weight 5 (ukanren.eq q "paid"))
+)
+# => [ "free" "paid" ]
+```
+
+---
+
+## wrunFull
+
+```
+wrunFull :: int -> (var -> goal) -> [{ answer: term; weight: int }]
+```
+
+Like `wrun` but returns records with both the reified answer and its accumulated weight. Useful for inspecting cost structure or post-filtering.
+
+```nix
+ukanren.wrunFull 3 (q:
+  ukanren.disj
+    (ukanren.weight 1 (ukanren.eq q "a"))
+    (ukanren.weight 3 (ukanren.eq q "b"))
+)
+# => [
+#      { answer = "a"; weight = 1; }
+#      { answer = "b"; weight = 3; }
+#    ]
+```
+
+---
+
+## Notes
+
+- Unweighted goals default to weight `0`.
+- `wrun`/`wrunFull` use the same initial state as `run`, extended with `weight = 0`.
+- Sort is stable: equal-weight answers preserve stream order.
+- To combine weighted search with constraints, use `weight`/`wrun` alongside `constrain` (the CHR layer). Constraint filtering happens in the stream; weighted sorting happens after.

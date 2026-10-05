@@ -1,0 +1,102 @@
+---
+title: Logic Synthesis
+description: Program-by-example, weighted search, and selector synthesis with ukanrenix.
+---
+
+## Program-by-example with defBank
+
+`defBank` evaluates a relation once against canonical variables, caches all answers, then uses that cache for every subsequent query. Define the relation once; query as many times as needed without re-running enumeration.
+
+```nix
+let
+  u = import ./. {};
+
+  # membership relation: x is in [1 2 3]
+  membero = u.defBank 1 (cvars:
+    let x = builtins.head cvars;
+    in u.disj (u.eq x 1)
+       (u.disj (u.eq x 2)
+               (u.eq x 3))
+  );
+in
+u.run 10 (q: membero [ q ])
+# => [ 1 2 3 ]
+```
+
+The `n` argument to `defBank` is the arity — number of canonical variables. The returned function takes a list of `n` terms.
+
+## Weighted synthesis with wrun
+
+`weight w goal` adds `w` to the score of every answer the goal produces. `wrun n goalFn` returns the top-`n` answers sorted by ascending accumulated weight (cheapest first).
+
+```nix
+let u = import ./. {};
+in
+u.wrun 3 (q:
+  u.disj
+    (u.weight 2 (u.eq q "expensive"))
+    (u.weight 0 (u.eq q "free"))
+)
+# => [ "free" "expensive" ]
+```
+
+Use `wrunFull` to get weights alongside answers:
+
+```nix
+u.wrunFull 3 (q:
+  u.disj
+    (u.weight 5 (u.eq q "costly"))
+    (u.weight 1 (u.eq q "cheap"))
+)
+# => [ { answer = "cheap"; weight = 1; } { answer = "costly"; weight = 5; } ]
+```
+
+## Selector synthesis with synthSelectorGoal
+
+Given a set of positive nodes (must match) and negative nodes (must not match), `synthSelectorGoal` enumerates all valid selectors relationally.
+
+```nix
+let u = import ./. {};
+
+positives = [ { kind = "fn"; } { kind = "fn"; name = "foo"; } ];
+negatives = [ { kind = "var"; } ];
+in
+u.run 10 (q: u.synthSelectorGoal positives negatives q)
+# => [ { attrs = { kind = "fn"; }; } ]
+```
+
+Candidate shapes: `{ star = true; }`, `{ attr = "k"; }` (has-key), `{ attrs = { k = v; }; }` (exact kv).
+
+## bankSynthSelector — memoized repeated queries
+
+When calling selector synthesis repeatedly with the same positive/negative sets, use `bankSynthSelector` to memoize enumeration:
+
+```nix
+let u = import ./. {};
+
+positives = [ { type = "expr"; } ];
+negatives = [ { type = "decl"; } ];
+
+selectorGoal = u.bankSynthSelector positives negatives;
+in
+u.run 5 (q: selectorGoal q)
+```
+
+`bankSynthSelector` calls `defBank` internally, so the valid-selector enumeration runs once regardless of how many times the goal is invoked.
+
+## Staged synthesis with evalExpr
+
+`nix/staged.nix` provides `evalExpr` for backward evaluation — given a target value, find inputs that produce it.
+
+```nix
+let u = import ./. {};
+
+# evalExpr env expr q: q unifies with the result of evaluating expr under env
+in
+u.run 1 (q:
+  u.evalExpr { x = q; } (u.Var "x") 42
+)
+# => [ 42 ]
+```
+
+Combine with `wrun` to rank by number of invented bindings.

@@ -1,0 +1,111 @@
+---
+title: Getting Started
+description: Import ukanrenix and write your first relational programs in Nix.
+---
+
+## Import
+
+No flake required. `import ./. {}` returns the full ukanren attrset.
+
+```nix
+let
+  ukanren = import (fetchTarball "github:denful/ukanrenix") {};
+in
+```
+
+Or pin it locally:
+
+```nix
+let ukanren = import /path/to/ukanrenix {}; in
+```
+
+## First goal
+
+`run n goalFn` takes a goal function `q: ...` and returns up to `n` reified answers.
+
+```nix
+ukanren.run 1 (q: ukanren.eq q 42)
+# => [ 42 ]
+```
+
+The variable `q` is `v0` internally. `eq` unifies it with `42`. `run` extracts one answer.
+
+## Fresh variables
+
+`fresh` allocates a new logic variable and passes it to a continuation.
+
+```nix
+ukanren.run 1 (q:
+  ukanren.fresh (x:
+    ukanren.conj
+      (ukanren.eq x 7)
+      (ukanren.eq q x)
+  )
+)
+# => [ 7 ]
+```
+
+Variables are named `v0`, `v1`, … by allocation order. Unbound variables reify as themselves.
+
+```nix
+ukanren.run 1 (q:
+  ukanren.fresh (x: ukanren.eq q [ 1 x 3 ])
+)
+# => [ [ 1 { __var = true; id = "v1"; } 3 ] ]
+```
+
+## Conjunction and disjunction
+
+`conj g1 g2` — both goals must succeed (logical AND).
+`disj g1 g2` — either goal succeeds (logical OR), interleaved.
+
+```nix
+# conjunction: q = 1 AND q = 1 (consistent)
+ukanren.run 1 (q:
+  ukanren.conj (ukanren.eq q 1) (ukanren.eq q 1)
+)
+# => [ 1 ]
+
+# disjunction: q = 1 OR q = 2
+ukanren.run 5 (q:
+  ukanren.disj (ukanren.eq q 1) (ukanren.eq q 2)
+)
+# => [ 1 2 ]
+```
+
+## Unification over lists and attrsets
+
+`unify` (and therefore `eq`) recurses into lists and attrsets structurally.
+
+```nix
+# list unification
+ukanren.run 1 (q:
+  ukanren.eq [ 1 q 3 ] [ 1 2 3 ]
+)
+# => [ 2 ]
+
+# attrset unification
+ukanren.run 1 (q:
+  ukanren.eq { a = q; b = 10; } { a = 5; b = 10; }
+)
+# => [ 5 ]
+```
+
+Keys must match exactly — attrsets with different key sets fail unification.
+
+## Evaluating with nix-instantiate
+
+```bash
+nix-instantiate --eval --expr '
+  let u = import ./. {};
+  in u.run 3 (q: u.disj (u.eq q 1) (u.eq q 2))
+'
+# => [ 1 2 ]
+```
+
+Add `--strict` to force full evaluation of nested structures.
+
+## Next steps
+
+- [Logic Synthesis](/guides/synthesis/) — weighted search, selector synthesis, program-by-example
+- [Gen Integration](/guides/gen-integration/) — backward synthesis over gen-merge, gen-select, gen-scope

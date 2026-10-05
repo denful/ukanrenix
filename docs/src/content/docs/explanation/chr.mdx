@@ -1,0 +1,126 @@
+---
+title: Constraint Handling Rules
+description: Deferred predicates, typeOf, diseq, and chrRun — constraint propagation over the search state.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Standard μKanren goals either succeed or fail immediately. Some predicates cannot be
+decided until a variable is ground. **CHR** (Constraint Handling Rules) adds deferred
+predicates that accumulate alongside the substitution and are checked at the end of
+search.
+
+## The problem `chrRun` solves
+
+Consider `typeOf q "int"` when `q` is still unbound. The type is unknown — the goal
+cannot fail yet, but it also cannot pass unconditionally. CHR records the constraint
+and re-checks it when `q` eventually receives a binding.
+
+## `constrain pred`
+
+`constrain pred` attaches a predicate function to the current stream entry. The
+predicate receives the final substitution and returns `true` or `false`.
+
+```nix
+# custom constraint: value must be even
+constrain (subst: let v = walk subst q; in !isVar v && builtins.mod v 2 == 0)
+```
+
+Constraints accumulate — a stream entry can carry many. All must pass for the answer
+to be emitted by `chrRun`.
+
+## `chrRun n goalFn`
+
+`chrRun` is `run`'s constraint-aware counterpart. After collecting up to `n` stream
+entries, it evaluates every accumulated constraint against the final substitution and
+filters out entries where any constraint fails.
+
+```nix
+chrRun 1 (q: conj (typeOf q "int") (eq q 42))
+# => [ 42 ]
+
+chrRun 1 (q: conj (typeOf q "int") (eq q "hello"))
+# => []    (typeOf fails: "hello" is not an int)
+```
+
+<Aside type="note">
+Use `chrRun` whenever your goal uses `typeOf`, `diseq`, or any custom `constrain`
+call. Plain `run` ignores accumulated constraints entirely.
+</Aside>
+
+## `typeOf var expected`
+
+Deferred type check. `expected` is a string tag:
+
+| tag | Nix check |
+|---|---|
+| `"int"` | `builtins.isInt` |
+| `"string"` | `builtins.isString` |
+| `"bool"` | `builtins.isBool` |
+| `"list"` | `builtins.isList` |
+| `"attrs"` | `builtins.isAttrs` |
+
+While `var` is unbound the constraint is deferred — the answer is retained. Once `var`
+is ground the constraint checks its type.
+
+```nix
+# unbound → deferred → answer kept (q reified as _.0)
+builtins.length (chrRun 1 (q: typeOf q "string"))
+# => 1
+
+# bound to wrong type → filtered out
+chrRun 1 (q: conj (typeOf q "string") (eq q 99))
+# => []
+
+# bound to correct type → passes
+chrRun 1 (q: conj (typeOf q "string") (eq q "hi"))
+# => [ "hi" ]
+```
+
+## `diseq a b`
+
+Inequality constraint. Succeeds (deferred) while either `a` or `b` is unbound. Once
+both are ground, fails if `a == b`.
+
+```nix
+chrRun 3 (q:
+  fresh (x:
+    conj
+      (diseq x 2)
+      (conj (disj (eq x 1) (disj (eq x 2) (eq x 3)))
+            (eq q x))))
+# => [ 1 3 ]   (2 filtered out)
+```
+
+`diseq` is useful when a relation must enumerate **distinct** values, or when a
+generated program must avoid a particular constant.
+
+## Custom constraints
+
+Any Nix predicate that inspects the final substitution works as a constraint:
+
+```nix
+let
+  isEven = subst:
+    let v = walk subst q;
+    in !isVar v && builtins.mod v 2 == 0;
+in
+chrRun 5 (q:
+  conj
+    (constrain isEven)
+    (disj (eq q 1) (disj (eq q 2) (disj (eq q 3) (disj (eq q 4) (eq q 5))))))
+# => [ 2 4 ]
+```
+
+## `run` vs `chrRun`
+
+| | `run` | `chrRun` |
+|---|---|---|
+| accumulated constraints | ignored | evaluated and filtered |
+| performance | faster | slight overhead per entry |
+| use when | no `typeOf`/`diseq`/`constrain` | any deferred predicate present |
+
+<Aside type="tip">
+It is safe to use `chrRun` for all queries. The cost is negligible when no constraints
+are attached.
+</Aside>

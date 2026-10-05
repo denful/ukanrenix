@@ -1,0 +1,176 @@
+---
+title: μKanren in Nix
+description: State, variables, unification, streams, and the five core goal combinators.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+μKanren is a minimal relational logic kernel. ukanrenix implements it in pure Nix:
+no builtins beyond `builtins.*`, no imports, no side effects.
+
+## State
+
+Every search step carries a **state** attrset:
+
+```nix
+{ subst = { … };   # substitution map: var-id -> term
+  counter = n;     # next fresh variable id
+}
+```
+
+`subst` starts empty. `counter` starts at `0`. Goals receive a state and return a
+stream of successor states — one per way the goal can succeed.
+
+## Variables
+
+A logic variable is a plain Nix attrset:
+
+```nix
+{ __var = true; id = 3; }
+```
+
+Three primitives work with variables:
+
+| function | signature | description |
+|---|---|---|
+| `mkVar` | `n -> Var` | constructs `{__var=true, id=n}` |
+| `isVar` | `term -> bool` | tests for `__var=true` |
+| `walk` | `subst -> term -> term` | chases the substitution chain |
+
+`walk` is not recursive on structure — it only follows variable bindings. Structural
+recursion happens inside `unify`.
+
+```nix
+let s = { "0" = { __var = true; id = 1; }; "1" = 42; };
+in walk s (mkVar 0)   # => 42
+```
+
+## Unification
+
+`unify subst u v` attempts to make `u` and `v` equal under `subst`.
+It returns an extended substitution on success, or `null` on failure.
+
+Rules applied in order:
+
+1. Walk both sides.
+2. If either side is already the other after walking, return `subst` unchanged.
+3. If `u` is a variable, extend `subst` with `u -> v`.
+4. If `v` is a variable, extend `subst` with `v -> u`.
+5. If both are lists of the same length, unify element-wise.
+6. If both are attrsets with the same key set, unify value-wise for each key.
+7. If both are ground scalars, return `subst` iff `u == v`, else `null`.
+
+```nix
+unify {} [ (mkVar 0) 2 ] [ 1 2 ]
+# => { "0" = 1; }
+
+unify {} (mkVar 0) (mkVar 0)
+# => {}   (already equal)
+
+unify {} 1 2
+# => null  (failure)
+```
+
+<Aside type="note">
+Attrset unification requires **identical key sets**. `{a=1; b=?}` does not unify with
+`{a=1;}` — the structures must match shape before values are unified.
+</Aside>
+
+## The five core goal combinators
+
+### `succeed`
+
+Passes the current state through unchanged. The identity of `conj`.
+
+```nix
+run 1 (q: conj (eq q 42) succeed)
+# => [ 42 ]
+```
+
+### `fail`
+
+Returns the empty stream. The identity of `disj`. Useful as a default branch.
+
+```nix
+run 5 (q: fail)
+# => []
+```
+
+### `eq a b`
+
+The unification goal. Calls `unify` on `a` and `b`; on success emits a single
+successor state with the extended substitution; on failure returns `null` (empty stream).
+
+```nix
+run 1 (q: eq q "hello")
+# => [ "hello" ]
+```
+
+### `conj g1 g2`
+
+Sequential conjunction — `g1` must succeed, then `g2` runs on each resulting state.
+Answers must satisfy **both** goals.
+
+```nix
+run 1 (q: fresh (a: fresh (b:
+  conj (eq a 1) (conj (eq b 2) (eq q [a b])))))
+# => [ [1 2] ]
+```
+
+### `disj g1 g2`
+
+Interleaved disjunction — runs both goals and merges their streams. Answers satisfy
+**either** goal. Interleaving (rather than appending) ensures fairness when either
+branch is infinite.
+
+```nix
+run 3 (q: disj (eq q "a") (disj (eq q "b") (eq q "c")))
+# => [ "a" "b" "c" ]
+```
+
+### `fresh f`
+
+Allocates a new logic variable (id = `state.counter`), increments the counter, and
+passes the variable to `f` which returns a goal.
+
+```nix
+run 2 (q:
+  fresh (x:
+    disj (eq x 1) (eq x 2)
+    |> (g: conj g (eq q x))))
+```
+
+## Streams
+
+A stream is either:
+
+- `null` — the empty stream
+- `{ head = state; tail = streamOrThunk; }` — a non-empty stream
+
+`tail` may be a **thunk** (a zero-argument lambda) for lazy evaluation — this is what
+enables infinite search spaces. `streamTake n stream` forces thunks as it goes,
+collecting up to `n` head states.
+
+```
+null                          # empty
+{ head=s0; tail=null; }       # one answer
+{ head=s0; tail= (_: …); }   # lazy tail
+```
+
+## `run n goalFn`
+
+Top-level query driver:
+
+1. Create empty state `{subst={}; counter=0;}`.
+2. Call `goalFn (mkVar 0)` — passes a fresh query variable.
+3. `streamTake n` on the resulting stream.
+4. `reify` each state: walk the query variable fully, replacing any remaining unbound
+   variables with canonical names `_.0`, `_.1`, …
+
+```nix
+run 2 (q: disj (eq q true) (eq q false))
+# => [ true false ]
+
+run 1 (q: fresh (x: eq q [x x]))
+# => [ [ _.0 _.0 ] ]   (x unbound — reified as _.0)
+```

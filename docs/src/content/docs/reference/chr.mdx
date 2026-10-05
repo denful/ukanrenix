@@ -1,0 +1,118 @@
+---
+title: CHR Reference
+description: Constraint Handling Rules — constrain, chrRun, typeOf, diseq.
+---
+
+CHR constraints are predicates stored in the state and checked lazily. They are deferred while variables are unbound and evaluated when answers are collected by `chrRun`.
+
+Use `chrRun` instead of `run` when your goals include `constrain`, `typeOf`, or `diseq`.
+
+---
+
+## constrain
+
+```
+constrain :: (state -> bool) -> goal
+```
+
+Records a predicate in the state's `constraints` list. Always succeeds immediately — the predicate is not checked until `chrRun` collects answers.
+
+```nix
+let mustBePositive = ukanren.constrain (state:
+  let v = ukanren.reify state.subst myVar;
+  in ukanren.isVar v || v > 0
+);
+```
+
+Pattern: return `true` if the variable is still unbound (`isVar`), or if the constraint is satisfied when ground. Return `false` to prune the branch.
+
+---
+
+## chrRun
+
+```
+chrRun :: int -> (var -> goal) -> [term]
+```
+
+Like `run`, but initialises `constraints = []` in the state and filters the stream: only answers where all constraints pass are returned.
+
+```nix
+ukanren.chrRun 5 (q:
+  ukanren.conj
+    (ukanren.typeOf q "int")
+    (ukanren.disj
+      (ukanren.eq q 1)
+      (ukanren.eq q "oops"))
+)
+# => [ 1 ]
+```
+
+---
+
+## typeOf
+
+```
+typeOf :: var -> string -> goal
+```
+
+Constrains `var` to have a specific Nix type when ground. Valid type strings: `"int"`, `"string"`, `"bool"`, `"list"`, `"set"`, `"float"`, `"null"`.
+
+Uses `builtins.typeOf` for ground values. Passes silently while the variable is unbound.
+
+```nix
+ukanren.chrRun 3 (q:
+  ukanren.conj
+    (ukanren.typeOf q "string")
+    (ukanren.disj
+      (ukanren.eq q "hello")
+      (ukanren.eq q 99)        # pruned
+      )
+)
+# => [ "hello" ]
+```
+
+---
+
+## diseq
+
+```
+diseq :: term -> term -> goal
+```
+
+Asserts that two terms are not equal when both are ground. Deferred while either term contains an unbound variable.
+
+```nix
+ukanren.chrRun 5 (q:
+  ukanren.conj
+    (ukanren.diseq q 2)
+    (ukanren.disj
+      (ukanren.eq q 1)
+      (ukanren.eq q 2)   # pruned
+      )
+)
+# => [ 1 ]
+```
+
+---
+
+## Custom constraints
+
+Any `state -> bool` function works with `constrain`. Access the substitution via `state.subst` and reify variables with `ukanren.reify`:
+
+```nix
+let
+  between = lo: hi: var:
+    ukanren.constrain (state:
+      let v = ukanren.reify state.subst var;
+      in ukanren.isVar v || (v >= lo && v <= hi)
+    );
+in
+ukanren.chrRun 10 (q:
+  ukanren.conj
+    (between 3 7 q)
+    (ukanren.disj (ukanren.eq q 2)
+    (ukanren.disj (ukanren.eq q 5)
+                  (ukanren.eq q 9)))
+)
+# => [ 5 ]
+```

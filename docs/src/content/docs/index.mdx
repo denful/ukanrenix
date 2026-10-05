@@ -1,0 +1,45 @@
+---
+title: ukanrenix
+description: Pure-Nix μKanren. Relational logic programming, weighted search, and constraint handling — all in Nix expressions.
+template: splash
+hero:
+  tagline: |
+    Pure-Nix μKanren.
+    Relational logic, weighted synthesis, and constraint rules — zero dependencies.
+  image:
+    html: |
+      <img src="/ukanrenix.svg" style="max-width: 80%" />
+  actions:
+    - text: Overview
+      link: /overview
+      icon: open-book
+    - text: Getting Started
+      link: /guides/getting-started/
+      icon: rocket
+      variant: minimal
+    - text: Source Code
+      link: https://github.com/vic/ukanrenix
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+**ukanrenix is a pure-Nix μKanren implementation**.
+Write relational programs in Nix: unify terms, enumerate answers via lazy streams,
+rank solutions by cost, and propagate constraints — all as ordinary Nix expressions.
+
+<CardGrid>
+  <Card title="Relational" icon="approve-check">
+    Run goals forward or backward. `run n goalFn` enumerates up to n answers as reified Nix values.
+  </Card>
+  <Card title="Weighted" icon="list-format">
+    Tropical semiring search. `weight w goal` scores answers. `wrun` returns top-n by ascending cost.
+  </Card>
+  <Card title="Constraints" icon="pencil">
+    CHR constraint propagation. `typeOf`, `diseq`, and custom predicates deferred until ground.
+  </Card>
+  <Card title="Gen Integration" icon="nix">
+    Backward synthesis over gen-merge, gen-select, gen-scope, and gen-types ecosystems.
+  </Card>
+</CardGrid>

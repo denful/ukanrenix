@@ -1,0 +1,65 @@
+---
+title: Bank Reference
+description: defBank for memoized relation enumeration, and pruneBy for deduplication.
+---
+
+## defBank
+
+```
+defBank :: int -> ([var] -> goal) -> ([term] -> goal)
+```
+
+Evaluates a relation once against `n` canonical variables (named `c0`…`c{n-1}`), caches all answers (up to 1000), and returns a goal constructor that matches its arguments against the cache.
+
+**Arguments:**
+- `n` — arity (number of canonical variables)
+- `body` — `[var] -> goal` — relation body, called once with canonical vars
+
+**Returns:** `[term] -> goal` — call with a list of `n` terms; succeeds once per cached answer that unifies.
+
+```nix
+let
+  u = import ./. {};
+
+  # parent relation: (parent, child)
+  parento = u.defBank 2 (cvars:
+    let p = builtins.elemAt cvars 0;
+        c = builtins.elemAt cvars 1;
+    in u.disj (u.conj (u.eq p "alice") (u.eq c "bob"))
+       (u.disj (u.conj (u.eq p "alice") (u.eq c "carol"))
+               (u.conj (u.eq p "bob")   (u.eq c "dave")))
+  );
+in
+# query: who are alice's children?
+u.run 5 (q: parento [ "alice" q ])
+# => [ "bob" "carol" ]
+```
+
+**Why use it:** If the relation body is expensive (deep disjunction, recursive construction), `defBank` pays that cost once. Subsequent queries scan the flat answer cache instead of re-running the goal.
+
+**Canonical variable naming:** canonical vars use `c` prefix to avoid clashing with query vars (`v` prefix). The canonical state starts with `counter = n` for the same reason.
+
+**Cache size:** `pruneCanon` takes at most 1000 states from the canonical stream. Relations with more than 1000 ground answers will be silently truncated.
+
+---
+
+## pruneBy
+
+```
+pruneBy :: (a -> key) -> [a] -> [a]
+```
+
+Removes duplicates from a list, keeping the first occurrence of each key. Comparison is structural (`builtins.elem`).
+
+```nix
+let u = import ./. {};
+in
+u.pruneBy (x: x.id) [
+  { id = "a"; val = 1; }
+  { id = "b"; val = 2; }
+  { id = "a"; val = 99; }   # duplicate key — dropped
+]
+# => [ { id = "a"; val = 1; } { id = "b"; val = 2; } ]
+```
+
+Used internally by `selector-synth` to deduplicate candidate key-value pairs. Also useful for deduplicating synthesis results before presenting them.

@@ -1,0 +1,92 @@
+---
+title: LLM Oracle Reference
+description: Ranked completion of partial attrsets against a type schema — rankedComplete, rankedCompleteFull, llmComplete.
+---
+
+The LLM Oracle module models LLM output completion as weighted unification. Given a schema (field → type string) and a partial attrset (known fields), it enumerates completions ranked by fewest invented fields.
+
+Weight = number of fields absent from `partial` that had to be invented (assigned a fresh variable). Lower weight = closer to what was already known.
+
+---
+
+## rankedComplete
+
+```
+rankedComplete :: schema -> partial -> int -> [term]
+```
+
+Returns up to `n` completions of `partial` satisfying `schema`, sorted by ascending weight (fewest invented fields first).
+
+**Arguments:**
+- `schema` — `{ fieldName = typeString; ... }` — type string is a `builtins.typeOf` value: `"int"`, `"string"`, `"bool"`, `"list"`, `"set"`, `"float"`, `"null"`
+- `partial` — attrset with known field values (may include variables)
+- `n` — maximum completions to return
+
+```nix
+let u = import ./. {};
+
+schema = { name = "string"; age = "int"; admin = "bool"; };
+partial = { name = "alice"; };
+in
+u.rankedComplete schema partial 3
+# => [
+#      { name = "alice"; }   -- weight 2: age and admin invented
+#    ]
+```
+
+Fields in `partial` that conflict with schema types cause immediate failure (no completions returned).
+
+---
+
+## rankedCompleteFull
+
+```
+rankedCompleteFull :: schema -> partial -> int -> [{ answer: term; weight: int }]
+```
+
+Like `rankedComplete` but returns records with both the completed answer and its weight.
+
+```nix
+let u = import ./. {};
+
+schema  = { x = "int"; y = "int"; };
+partial = { x = 1; };
+in
+u.rankedCompleteFull schema partial 5
+# => [ { answer = { x = 1; }; weight = 1; } ]
+```
+
+The `answer` contains only the fields present in `partial` (ground fields). Invented fields remain as logic variables in the reified result.
+
+---
+
+## llmComplete
+
+```
+llmComplete :: schema -> partial -> var -> goal
+```
+
+The underlying relational goal. `q` is unified with the completed attrset.
+
+- Fields present in `partial`: included as-is, weight 0.
+- Fields absent from `partial`: assigned a fresh variable with `weight 1`.
+- Ground partial values violating schema types: fail immediately.
+
+```nix
+let u = import ./. {};
+
+schema  = { status = "string"; code = "int"; };
+partial = { code = 200; };
+in
+u.run 3 (q: u.llmComplete schema partial q)
+# => [ { code = 200; } ]
+```
+
+Use `llmComplete` directly when composing with other goals (e.g., adding additional `eq` constraints on the result).
+
+---
+
+## Notes
+
+- `rankedComplete` / `rankedCompleteFull` delegate to `wrun` / `wrunFull`, so all semiring behaviour applies (deduplication, stable sort).
+- The oracle is purely structural — it does not call any external LLM. The name reflects the intended use: score partial outputs from an LLM by how much was already known vs. invented.

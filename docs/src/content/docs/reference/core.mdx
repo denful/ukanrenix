@@ -1,0 +1,199 @@
+---
+title: Core API
+description: Complete reference for ukanrenix core functions — variables, unification, goals, and runners.
+---
+
+## Variables
+
+### mkVar
+
+```
+mkVar :: string -> var
+```
+
+Constructs a logic variable with the given id. Variables are attrsets `{ __var = true; id = "..."; }`.
+
+```nix
+ukanren.mkVar "x"
+# => { __var = true; id = "x"; }
+```
+
+### isVar
+
+```
+isVar :: any -> bool
+```
+
+Returns `true` if the value is a logic variable.
+
+```nix
+ukanren.isVar (ukanren.mkVar "x")  # => true
+ukanren.isVar 42                    # => false
+```
+
+### walk
+
+```
+walk :: subst -> term -> term
+```
+
+Follows variable bindings in `subst` until reaching an unbound variable or a non-variable term.
+
+```nix
+let subst = { v0 = 42; };
+in ukanren.walk subst (ukanren.mkVar "v0")
+# => 42
+```
+
+---
+
+## Unification
+
+### unify
+
+```
+unify :: term -> term -> subst -> subst | null
+```
+
+Unifies `u` and `v` under `subst`. Returns an extended substitution, or `null` if unification fails. Recurses into lists (by index) and attrsets (by key — keys must match exactly).
+
+```nix
+ukanren.unify 1 1 {}           # => {}
+ukanren.unify 1 2 {}           # => null
+ukanren.unify (ukanren.mkVar "v0") 42 {}
+# => { v0 = 42; }
+ukanren.unify [ 1 (ukanren.mkVar "v0") ] [ 1 2 ] {}
+# => { v0 = 2; }
+```
+
+---
+
+## Goals
+
+A **goal** is a function `state -> stream`. States carry `{ subst; counter; }` plus optional extensions (`weight`, `constraints`). Streams are lazy linked lists `{ head; tail; } | null`.
+
+### succeed
+
+```
+succeed :: goal
+```
+
+Always succeeds. Returns the current state unchanged.
+
+### fail
+
+```
+fail :: goal
+```
+
+Always fails. Returns `null`.
+
+### eq
+
+```
+eq :: term -> term -> goal
+```
+
+Unifies two terms. Succeeds with an extended substitution if unification succeeds; fails otherwise.
+
+```nix
+ukanren.run 1 (q: ukanren.eq q 42)
+# => [ 42 ]
+```
+
+### fresh
+
+```
+fresh :: (var -> goal) -> goal
+```
+
+Allocates a fresh variable (named `v{counter}`), increments the counter, and passes the variable to `f`.
+
+```nix
+ukanren.run 1 (q:
+  ukanren.fresh (x: ukanren.eq q [ x 2 ])
+)
+# => [ [ { __var = true; id = "v1"; } 2 ] ]
+```
+
+The query variable is always `v0` (allocated first by `run`).
+
+### conj
+
+```
+conj :: goal -> goal -> goal
+```
+
+Sequential conjunction. Runs `g1`, then pipes each resulting state through `g2`.
+
+```nix
+ukanren.run 1 (q:
+  ukanren.conj
+    (ukanren.eq q 1)
+    (ukanren.eq q 1)   # consistent — succeeds
+)
+# => [ 1 ]
+```
+
+### disj
+
+```
+disj :: goal -> goal -> goal
+```
+
+Interleaved disjunction. Runs both goals and merges their streams via `mplus` (fair interleaving).
+
+```nix
+ukanren.run 4 (q:
+  ukanren.disj (ukanren.eq q "a") (ukanren.eq q "b")
+)
+# => [ "a" "b" ]
+```
+
+---
+
+## Reification and running
+
+### reify
+
+```
+reify :: subst -> term -> term
+```
+
+Walks a term deeply, replacing bound variables with their values. Unbound variables are left as-is.
+
+```nix
+ukanren.reify { v0 = 5; } [ (ukanren.mkVar "v0") 2 ]
+# => [ 5 2 ]
+```
+
+### run
+
+```
+run :: int -> (var -> goal) -> [term]
+```
+
+Creates an initial state, allocates the query variable `v0` via `fresh`, runs the goal, takes up to `n` answers from the stream, and reifies each answer.
+
+```nix
+ukanren.run 3 (q:
+  ukanren.disj (ukanren.eq q 1) (ukanren.eq q 2)
+)
+# => [ 1 2 ]
+```
+
+Pass `999` (or a large number) to collect all answers from finite relations.
+
+### streamTake
+
+```
+streamTake :: int -> stream -> [state]
+```
+
+Pulls up to `n` states from a lazy stream. Returns raw states (not reified). Used internally by `run`; available for custom runners.
+
+```nix
+let stream = ukanren.eq 1 1 { subst = {}; counter = 0; };
+in ukanren.streamTake 1 stream
+# => [ { subst = {}; counter = 0; } ]
+```

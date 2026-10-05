@@ -1,0 +1,104 @@
+---
+title: Gen Ecosystem Integration
+description: Use ukanrenix for backward synthesis over gen-merge, gen-select, gen-scope, and gen-types.
+---
+
+## Import
+
+`gen-integration.nix` wires ukanrenix with the gen ecosystem. Pass whichever gen libraries you have:
+
+```nix
+let
+  ukanren = import ./gen-integration.nix {
+    inherit genMerge genSelect genTypes genScope;
+  };
+in
+```
+
+The returned attrset is the standard ukanren attrset extended with gen-native synthesis functions. All core functions (`run`, `eq`, `fresh`, …) remain available.
+
+## gen-schema-synth: synthFromOptions
+
+Find option values satisfying a gen-merge schema.
+
+```nix
+let options = {
+  port    = genMerge.mkOption { type = genMerge.types.int; };
+  host    = genMerge.mkOption { type = genMerge.types.str; };
+  verbose = genMerge.mkOption { type = genMerge.types.bool; };
+};
+
+desired = { port = 8080; };
+in
+ukanren.synthFromOptions options desired 3
+# => [ { weight = 2; answer = { port = 8080; }; } ... ]
+```
+
+Weight = number of fields not present in `desired` (invented fields). `importSel` searches a library of option-attrsets for schemas that cover `desired`.
+
+`synthMinimalOverride base options desired` returns only the fields that differ from `base` — useful for computing minimal config deltas.
+
+## gen-select-synth: selector synthesis
+
+`synthSelector` returns gen-select native `{__sel=...}` values rather than internal shapes.
+
+```nix
+ukanren.synthSelector
+  [ { kind = "fn"; } ]   # positives
+  [ { kind = "var"; } ]  # negatives
+  5
+# => [ { __sel = "attrs"; a = { kind = "fn"; }; } ]
+```
+
+Uses `genSelect.matches` as the oracle for verification, so results are guaranteed to be valid gen-select selectors.
+
+## gen-merge-backward: evalModuleo
+
+`evalModuleo` wraps `genMerge.evalModuleTree` as a relational goal. Forward: ground modules → result. Backward: constrain via partial unification.
+
+```nix
+# Forward: evaluate a module set and unify with q
+ukanren.run 1 (q:
+  ukanren.evalModuleo [ moduleA moduleB ] q
+)
+
+# Backward: find modules whose merged config has port = 8080
+ukanren.synthFromModules moduleLib { port = 8080; } 3
+# => [ { weight = 1; answer = [ moduleA ]; config = { port = 8080; ... }; } ... ]
+```
+
+`synthFromModules` enumerates all subsets of `moduleLib` (smallest first) and keeps those whose merged config covers `desired`. Weight = subset size.
+
+## gen-scope-synth: synthDecls
+
+Find minimal declarations for desired scope-graph attribute evaluations.
+
+```nix
+ukanren.synthDecls
+  nodeIds          # list of node id strings
+  parentGraph      # gen-scope algebraic graph
+  attrDefs         # { attrName = self: id: value; }
+  [ { id = "n1"; attr = "ty"; value = "Int"; } ]  # desired evaluations
+  candidateDecls   # list of decl attrsets to search
+  3
+# => [ { weight = 1; answer = { n1 = { x = 0; }; }; } ... ]
+```
+
+Weight = total declared field count across all nodes. Oracle: `genScope.eval`.
+
+## gen-types-chr: type guards
+
+Type guards via CHR constraints. Goals defer until the variable is ground, then call `genTypes.verify`.
+
+```nix
+ukanren.chrRun 3 (q:
+  ukanren.conj
+    (ukanren.intGoal q)
+    (ukanren.disj (ukanren.eq q 1) (ukanren.eq q "oops"))
+)
+# => [ 1 ]   — "oops" pruned by intGoal
+```
+
+Available goals: `intGoal`, `strGoal`, `boolGoal`, `listOfGoal elemChecker`, `nullOrGoal baseChecker`, `typeGoal checker` (generic).
+
+Use `chrRun` instead of `run` to enforce deferred constraints.
